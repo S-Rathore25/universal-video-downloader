@@ -6,6 +6,7 @@ const path = require('path');
 const dotenv = require('dotenv');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const crypto = require('crypto');
 
 dotenv.config();
 
@@ -14,6 +15,50 @@ const port = process.env.PORT || 3000;
 
 // 1. Trust Proxy for Render
 app.set('trust proxy', 1);
+
+// State Management
+const videoCache = new Map(); // simple in-memory cache
+const ipLocks = new Map(); // semaphore for 1 process per IP
+const recentRequests = new Map(); // tracking recent URLs per IP
+
+// Proxy Management
+const PROXY_POOL = (process.env.PROXY_POOL || '').split(',').map(p => p.trim()).filter(p => p);
+const proxyHealth = new Map(); // { fails: number, bannedUntil: number }
+
+function getHealthyProxy() {
+    if (PROXY_POOL.length === 0) return null;
+
+    // Shuffle proxies for random selection
+    const shuffled = [...PROXY_POOL].sort(() => 0.5 - Math.random());
+
+    for (const proxy of shuffled) {
+        const health = proxyHealth.get(proxy);
+        if (!health) return proxy;
+
+        if (Date.now() > health.bannedUntil) {
+            // Unban if time expired
+            proxyHealth.delete(proxy);
+            return proxy;
+        }
+    }
+
+    // If all banned, return the one with earliest unban time (fail-safe)
+    return null;
+}
+
+function markProxyBad(proxy) {
+    if (!proxy) return;
+
+    const health = proxyHealth.get(proxy) || { fails: 0, bannedUntil: 0 };
+    health.fails += 1;
+
+    if (health.fails >= 2) {
+        health.bannedUntil = Date.now() + (10 * 60 * 1000); // 10 mins
+        console.log(`[Proxy] Banned ${proxy.substring(0, 20)}... until ${new Date(health.bannedUntil).toISOString()}`);
+    }
+
+    proxyHealth.set(proxy, health);
+}
 
 // Cookie Setup
 const cookiesPath = path.join(__dirname, 'cookies.txt');
@@ -26,17 +71,31 @@ if (process.env.YOUTUBE_COOKIES) {
     }
 }
 
-// Random UA Generator
-function getRandomUserAgent() {
+// Session Management
+// Generate or retrieve persistent Session ID
+function getSessionId(req) {
+    return req.headers['x-session-id'] || crypto.randomUUID();
+}
+
+// Advanced Random Header Generator
+function generateBrowserHeaders(req) {
     const androidVersions = ['10', '11', '12', '13', '14'];
     const chromeVersions = ['114.0.0.0', '115.0.0.0', '116.0.0.0', '117.0.0.0'];
     const phones = ['Pixel 6', 'Pixel 7', 'Samsung Galaxy S22', 'OnePlus 9', 'Xiaomi Mi 11'];
 
-    const android = androidVersions[Math.floor(Math.random() * androidVersions.length)];
-    const chrome = chromeVersions[Math.floor(Math.random() * chromeVersions.length)];
-    const phone = phones[Math.floor(Math.random() * phones.length)];
+    // Hash IP/Session to sustain same UA for a session if possible, or random
+    const rand = Math.random();
 
-    return `Mozilla/5.0 (Linux; Android ${android}; ${phone}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Mobile Safari/537.36`;
+    const android = androidVersions[Math.floor(rand * androidVersions.length)];
+    const chrome = chromeVersions[Math.floor(rand * chromeVersions.length)];
+    const phone = phones[Math.floor(rand * phones.length)];
+
+    const ua = `Mozilla/5.0 (Linux; Android ${android}; ${phone}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Mobile Safari/537.36`;
+
+    const languages = ['en-US,en;q=0.9', 'en-GB,en;q=0.8', 'en-CA,en;q=0.8'];
+    const lang = languages[Math.floor(Math.random() * languages.length)];
+
+    return { ua, lang };
 }
 
 // Core Execution Helper
@@ -70,52 +129,101 @@ function executeYtDlp(args) {
     });
 }
 
-// Safe Wrapper (Delay + Retry + Anti-Bot Args)
-async function runSafeYtDlp(url, commandFlags) {
-    // 1. Random Delay (2-5s)
-    const delay = Math.floor(Math.random() * 3000) + 2000;
-    await new Promise(r => setTimeout(r, delay));
+// Queue & Throttling Wrapper
+async function runSafeYtDlp(req, url, commandFlags) {
+    const ip = req.ip || 'unknown';
 
-    const generateArgs = () => {
-        const ua = getRandomUserAgent();
-        const args = [
-            '--no-playlist',
-            '--no-check-certificates',
-            '--prefer-free-formats',
-            '--geo-bypass',
-            '--geo-bypass-country', 'IN',
-            '--socket-timeout', '15',
-            '--retries', '2',
-            '--fragment-retries', '2',
-            '--skip-unavailable-fragments',
-            '--concurrent-fragments', '1',
-            '--extractor-args', 'youtube:player_client=android',
-            '--extractor-args', 'youtube:player_skip=webpage,configs',
-            '--add-header', 'accept-language:en-US,en;q=0.9',
-            '--add-header', 'sec-fetch-mode:navigate',
-            '--add-header', 'sec-fetch-site:none',
-            '--add-header', 'sec-fetch-user:?1',
-            '--user-agent', ua
-        ];
+    // 1. Check IP Lock (1 concurrent process per IP)
+    if (ipLocks.get(ip)) {
+        throw new Error('QUEUE_FULL');
+    }
 
-        if (fs.existsSync(cookiesPath)) {
-            args.push('--cookies', cookiesPath);
-        }
+    // 2. Check Repeated Request (15s cooldown for SAME video)
+    const lastReq = recentRequests.get(ip);
+    if (lastReq && lastReq.url === url && (Date.now() - lastReq.time < 15000)) {
+        console.log(`[Anti-Scrape] Blocked repeat request from ${ip}`);
+        throw new Error('RATE_LIMIT_DUPLICATE');
+    }
+    recentRequests.set(ip, { url, time: Date.now() });
 
-        // Add command specific flags and URL
-        return [...args, ...commandFlags, url];
-    };
+    // Acquire Lock
+    ipLocks.set(ip, true);
 
     try {
-        return await executeYtDlp(generateArgs());
-    } catch (error) {
-        if (error.message === 'BOT_DETECTED') {
-            console.log('⚠️ Bot detected. Retrying with fresh UA...');
-            // Retry once
-            await new Promise(r => setTimeout(r, 2000));
-            return await executeYtDlp(generateArgs());
+        // 3. Random Delay (human simulation)
+        const delay = Math.floor(Math.random() * 2000) + 1000;
+        await new Promise(r => setTimeout(r, delay));
+
+        // Use session-consistent headers
+        const headers = generateBrowserHeaders(req);
+
+        // Retry Logic (Max 3 attempts with Proxy Rotation)
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const proxy = getHealthyProxy();
+
+            // If proxy pool is configured but no healthy proxy found
+            if (PROXY_POOL.length > 0 && !proxy) {
+                throw new Error('NO_HEALTHY_PROXIES');
+            }
+
+            const args = [
+                '--no-playlist',
+                '--no-check-certificates',
+                '--prefer-free-formats',
+                '--geo-bypass',
+                '--geo-bypass-country', 'IN',
+                '--socket-timeout', '15',
+                '--retries', '2',
+                '--fragment-retries', '2',
+                '--skip-unavailable-fragments',
+                '--concurrent-fragments', '1',
+
+                // Fingerprint simulation
+                '--extractor-args', 'youtube:player_client=android',
+                '--extractor-args', 'youtube:player_skip=webpage,configs',
+                '--add-header', `accept-language:${headers.lang}`,
+                '--add-header', 'sec-fetch-mode:navigate',
+                '--add-header', 'sec-fetch-site:none',
+                '--add-header', 'sec-fetch-user:?1',
+                '--add-header', `sec-ch-ua-platform:"Android"`,
+                '--add-header', `sec-ch-ua-mobile:?1`,
+                '--user-agent', headers.ua
+            ];
+
+            if (proxy) {
+                args.push('--proxy', proxy);
+            }
+
+            if (fs.existsSync(cookiesPath)) {
+                args.push('--cookies', cookiesPath);
+            }
+
+            const finalArgs = [...args, ...commandFlags, url];
+
+            try {
+                return await executeYtDlp(finalArgs);
+            } catch (error) {
+                lastError = error;
+                if (error.message === 'BOT_DETECTED') {
+                    console.log(`⚠️ Bot detected via ${proxy ? 'proxy' : 'direct'}. Attempt ${attempt + 1}/3`);
+                    if (proxy) markProxyBad(proxy);
+
+                    // Small delay before retry
+                    await new Promise(r => setTimeout(r, 1000));
+                    continue; // Retry with new proxy
+                }
+                // If it's another error (e.g. video not found), throw immediately
+                throw error;
+            }
         }
-        throw error;
+
+        // If we exhausted retries
+        throw lastError;
+
+    } finally {
+        // Release Lock
+        ipLocks.delete(ip);
     }
 }
 
