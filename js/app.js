@@ -23,7 +23,7 @@ const ELEMENTS = {
 };
 
 // State
-const API_BASE_URL = 'https://universal-video-downloader-c67b.onrender.com';
+const API_BASE_URL = '';
 let currentVideoData = null;
 
 // Initialization
@@ -182,7 +182,7 @@ async function generateLink(url, quality) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Failed to generate link');
 
-        const fullLink = API_BASE_URL + data.url;
+        const fullLink = window.location.origin + data.url;
         ELEMENTS.generatedLinkInput.value = fullLink;
         ELEMENTS.linkContainer.classList.remove('hidden');
         showToast('✅ Link generated!');
