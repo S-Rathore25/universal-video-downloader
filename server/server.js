@@ -28,7 +28,8 @@ function runYtDlp(args) {
         process.on('close', (code) => {
             if (code !== 0) {
                 console.error(`yt-dlp stderr: ${stderr}`);
-                reject(new Error(`yt-dlp exited with code ${code}`));
+                // Include stderr in error message for better debugging
+                reject(new Error(`yt-dlp failed: ${stderr.trim() || `Exit code ${code}`}`));
             } else {
                 try {
                     resolve(JSON.parse(stdout));
