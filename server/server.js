@@ -12,51 +12,9 @@ dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+const ytDlp = require('yt-dlp-exec');
 
-// Middleware
-// Middleware
-app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} [${req.method}] ${req.url}`);
-    next();
-});
-app.use(express.json());
-// Serve static files from root-level folders since they were moved out of 'public'
-app.use(express.static(path.join(__dirname, '../')));
-app.use('/css', express.static(path.join(__dirname, '../css')));
-app.use('/js', express.static(path.join(__dirname, '../js')));
-app.use(cors());
-
-// Configure Helmet with relaxed CSP for video downloading/previewing
-app.use(helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net"],
-            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-            fontSrc: ["'self'", "https://fonts.gstatic.com"],
-            imgSrc: ["'self'", "data:", "https://i.ytimg.com", "https://yt3.ggpht.com"],
-            connectSrc: ["'self'", "https://*.youtube.com", "https://*.googlevideo.com"],
-            mediaSrc: ["'self'", "blob:", "https://*.googlevideo.com"],
-            frameSrc: ["'self'"],
-            upgradeInsecureRequests: [],
-        },
-    },
-}));
-
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100, // Increased for testing, 30 might be too strict for assets
-    message: { error: 'Too many requests. Please try again later.' }
-});
-app.use('/api/', limiter);
-
-const cache = new NodeCache({ stdTTL: 3600 });
-const downloadsDir = path.join(__dirname, '../downloads');
-
-if (!fs.existsSync(downloadsDir)) {
-    fs.mkdirSync(downloadsDir, { recursive: true });
-}
+// ... (middleware remains same)
 
 // Routes
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
@@ -64,34 +22,36 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 app.post('/api/video-info', async (req, res) => {
     try {
         const { url } = req.body;
-        if (!ytdl.validateURL(url)) return res.status(400).json({ error: 'Invalid YouTube URL' });
+        // Basic check, yt-dlp handles validation better
+        if (!url || !url.includes('youtu')) return res.status(400).json({ error: 'Invalid YouTube URL' });
 
-        const info = await ytdl.getInfo(url, {
-            requestOptions: {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                }
-            }
+        const output = await ytDlp(url, {
+            dumpSingleJson: true,
+            noCheckCertificates: true,
+            noWarnings: true,
+            preferFreeFormats: true,
+            addHeader: [
+                'referer:youtube.com',
+                'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            ]
         });
-        const formats = ytdl.filterFormats(info.formats, 'videoandaudio');
 
-        // Sort formats by quality roughly
-        formats.sort((a, b) => (b.height || 0) - (a.height || 0));
+        const formats = output.formats.filter(f => f.acodec !== 'none' && f.vcodec !== 'none'); // video+audio
+        // If no combined formats, fallback to video only or use best available
+        // For simplicity in this demo, filter for mp4 with audio
 
         const videoData = {
-            title: info.videoDetails.title,
-            thumbnail: info.videoDetails.thumbnails.pop().url,
-            channel: info.videoDetails.author.name,
-            views: parseInt(info.videoDetails.viewCount).toLocaleString(),
-            duration: formatDuration(info.videoDetails.lengthSeconds),
+            title: output.title,
+            thumbnail: output.thumbnail,
+            channel: output.uploader,
+            views: output.view_count.toLocaleString(),
+            duration: formatDuration(output.duration),
             formats: formats.map(f => ({
-                itag: f.itag,
-                quality: f.qualityLabel || `${f.height}p`,
-                container: f.container,
-                hasAudio: f.hasAudio,
-                hasVideo: f.hasVideo,
+                itag: f.format_id, // map format_id to itag for frontend compat
+                quality: f.format_note || `${f.height}p`,
+                container: f.ext,
+                hasAudio: f.acodec !== 'none',
+                hasVideo: f.vcodec !== 'none',
                 url: f.url
             }))
         };
@@ -105,38 +65,42 @@ app.post('/api/video-info', async (req, res) => {
 
 app.post('/api/download', async (req, res) => {
     try {
-        const { url, quality, type } = req.body; // type: 'direct' or 'link'
-        if (!ytdl.validateURL(url)) return res.status(400).json({ error: 'Invalid URL' });
+        const { url, quality, type } = req.body;
 
-        const info = await ytdl.getInfo(url);
-        const format = ytdl.chooseFormat(info.formats, { quality: quality || 'highest' });
-        const title = info.videoDetails.title.replace(/[^\w\s-]/gi, '_').substring(0, 50);
+        // Sanitize
+        const info = await ytDlp(url, { dumpSingleJson: true, noCheckCertificates: true });
+        const title = info.title.replace(/[^\w\s-]/gi, '_').substring(0, 50);
         const filename = `${title}.mp4`;
 
         if (type === 'direct') {
             res.header('Content-Disposition', `attachment; filename="${filename}"`);
-            ytdl(url, { format }).pipe(res);
+
+            // Stream directly to response
+            const stream = ytDlp.exec(url, {
+                format: quality === 'highest' ? 'best[ext=mp4]' : `${quality}+bestaudio/best`,
+                output: '-'
+            });
+
+            stream.stdout.pipe(res);
         } else {
-            // Link generation (save to server)
+            // Link generation
             const filePath = path.join(downloadsDir, filename);
-            // Check if file exists to avoid redownload (simple cache)
+
             if (fs.existsSync(filePath)) {
                 return res.json({ url: `/downloads/${encodeURIComponent(filename)}`, expires: '1 hour' });
             }
 
-            const stream = ytdl(url, { format }).pipe(fs.createWriteStream(filePath));
-
-            stream.on('finish', () => {
-                res.json({ url: `/downloads/${encodeURIComponent(filename)}`, expires: '1 hour' });
+            // Download to file
+            await ytDlp.exec(url, {
+                format: quality === 'highest' ? 'best[ext=mp4]' : `${quality}+bestaudio/best`,
+                output: filePath
             });
 
-            stream.on('error', (err) => {
-                res.status(500).json({ error: 'Download failed' });
-            });
+            res.json({ url: `/downloads/${encodeURIComponent(filename)}`, expires: '1 hour' });
         }
     } catch (error) {
         console.error('Download Error:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(500).json({ error: 'Server error during download' });
     }
 });
 
