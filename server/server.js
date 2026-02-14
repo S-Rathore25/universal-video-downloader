@@ -155,4 +155,8 @@ setInterval(() => {
     });
 }, 1800000); // 30 mins
 
-app.listen(port, () => console.log(`Server running on port ${port}`));
+const host = '0.0.0.0';
+app.listen(port, host, () => {
+    console.log(`Server starting...`);
+    console.log(`Server running at http://${host}:${port}`);
+});
