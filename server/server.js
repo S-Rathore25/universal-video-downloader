@@ -17,6 +17,40 @@ const port = process.env.PORT || 3000;
 // Enable trust proxy for Render/Heroku etc.
 app.set('trust proxy', 1);
 
+// Helper to get yt-dlp arguments with common options
+function getYtDlpArgs(url) {
+    const args = [
+        url,
+        '--no-check-certificates',
+        '--no-warnings',
+        '--prefer-free-formats',
+    ];
+
+    // Check for cookies file
+    const cookiesPath = path.join(__dirname, 'cookies.txt');
+    if (fs.existsSync(cookiesPath)) {
+        args.push('--cookies', cookiesPath);
+    }
+
+    // Use Android client as it's often more reliable for server-side requests
+    // Using 'android' is generally safer than 'ios' or 'web' on data center IPs
+    args.push('--extractor-args', 'youtube:player_client=android');
+    // Note: When using a specific player_client, it's often better to NOT set a custom User-Agent 
+    // that conflicts with the client's expected UA. yt-dlp sets the correct UA for 'android'.
+
+    return args;
+}
+
+// Write cookies from env var if present
+if (process.env.YOUTUBE_COOKIES) {
+    try {
+        fs.writeFileSync(path.join(__dirname, 'cookies.txt'), process.env.YOUTUBE_COOKIES);
+        console.log('Cookies file created from environment variable.');
+    } catch (err) {
+        console.error('Failed to create cookies file:', err);
+    }
+}
+
 // Helper to run yt-dlp command and return JSON output
 function runYtDlp(args) {
     return new Promise((resolve, reject) => {
@@ -107,16 +141,8 @@ app.post('/api/video-info', async (req, res) => {
         const { url } = req.body;
         if (!url || !url.includes('youtu')) return res.status(400).json({ error: 'Invalid YouTube URL' });
 
-        const args = [
-            url,
-            '--dump-single-json',
-            '--no-check-certificates',
-            '--no-warnings',
-            '--prefer-free-formats',
-            '--extractor-args', 'youtube:player_client=ios',
-            '--add-header', 'referer:youtube.com',
-            '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        ];
+        const args = getYtDlpArgs(url);
+        args.push('--dump-single-json');
 
         const output = await runYtDlp(args);
 
@@ -150,26 +176,18 @@ app.post('/api/download', async (req, res) => {
         const { url, quality, type } = req.body;
 
         // Metadata fetch for filename (lightweight)
-        const metadataArgs = [
-            url,
-            '--dump-single-json',
-            '--no-check-certificates',
-            '--extractor-args', 'youtube:player_client=ios',
-            '--add-header', 'referer:youtube.com',
-            '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        ];
+        const metadataArgs = getYtDlpArgs(url);
+        metadataArgs.push('--dump-single-json');
+
         const info = await runYtDlp(metadataArgs);
         const title = info.title.replace(/[^\w\s-]/gi, '_').substring(0, 50);
         const filename = `${title}.mp4`;
 
-        const args = [
-            url,
+        const args = getYtDlpArgs(url);
+        args.push(
             '-f', quality === 'highest' ? 'best[ext=mp4]' : `${quality}+bestaudio/best`,
-            '--extractor-args', 'youtube:player_client=ios',
-            '--add-header', 'referer:youtube.com',
-            '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             '-o', '-' // Output to stdout
-        ];
+        );
 
         if (type === 'direct') {
             res.header('Content-Disposition', `attachment; filename="${filename}"`);
