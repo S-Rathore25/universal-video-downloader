@@ -5,18 +5,17 @@ const cors = require('cors');
 const path = require('path');
 const dotenv = require('dotenv');
 const { spawn } = require('child_process');
+const fs = require('fs');
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-const fs = require('fs');
-
 // 1. Trust Proxy for Render
 app.set('trust proxy', 1);
 
-// Write cookies from env var if present
+// Cookie Setup
 const cookiesPath = path.join(__dirname, 'cookies.txt');
 if (process.env.YOUTUBE_COOKIES) {
     try {
@@ -27,23 +26,21 @@ if (process.env.YOUTUBE_COOKIES) {
     }
 }
 
-// Helper: Get common yt-dlp args
-function getCommonArgs() {
-    const args = [
-        '--no-check-certificates',
-        '--no-warnings',
-        '--extractor-args', 'youtube:player_client=android', // Anti-bot
-    ];
+// Random UA Generator
+function getRandomUserAgent() {
+    const androidVersions = ['10', '11', '12', '13', '14'];
+    const chromeVersions = ['114.0.0.0', '115.0.0.0', '116.0.0.0', '117.0.0.0'];
+    const phones = ['Pixel 6', 'Pixel 7', 'Samsung Galaxy S22', 'OnePlus 9', 'Xiaomi Mi 11'];
 
-    if (fs.existsSync(cookiesPath)) {
-        args.push('--cookies', cookiesPath);
-    }
+    const android = androidVersions[Math.floor(Math.random() * androidVersions.length)];
+    const chrome = chromeVersions[Math.floor(Math.random() * chromeVersions.length)];
+    const phone = phones[Math.floor(Math.random() * phones.length)];
 
-    return args;
+    return `Mozilla/5.0 (Linux; Android ${android}; ${phone}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Mobile Safari/537.36`;
 }
 
-// Helper: Run yt-dlp
-function runYtDlp(args) {
+// Core Execution Helper
+function executeYtDlp(args) {
     return new Promise((resolve, reject) => {
         const process = spawn('yt-dlp', args);
         let stdout = '';
@@ -54,8 +51,16 @@ function runYtDlp(args) {
 
         process.on('close', (code) => {
             if (code !== 0) {
-                console.error(`yt-dlp stderr: ${stderr}`);
-                reject(new Error(stderr.trim() || `Exit code ${code}`));
+                // Heuristic for bot detection
+                if (stderr.includes('Sign in to confirm') ||
+                    stderr.includes('bot') ||
+                    stderr.includes('429')) {
+                    const err = new Error('BOT_DETECTED');
+                    err.stderr = stderr;
+                    reject(err);
+                } else {
+                    reject(new Error(stderr.trim() || `Exit code ${code}`));
+                }
             } else {
                 resolve(stdout.trim());
             }
@@ -65,14 +70,58 @@ function runYtDlp(args) {
     });
 }
 
+// Safe Wrapper (Delay + Retry + Anti-Bot Args)
+async function runSafeYtDlp(url, commandFlags) {
+    // 1. Random Delay (2-5s)
+    const delay = Math.floor(Math.random() * 3000) + 2000;
+    await new Promise(r => setTimeout(r, delay));
+
+    const generateArgs = () => {
+        const ua = getRandomUserAgent();
+        const args = [
+            '--no-playlist',
+            '--no-check-certificates',
+            '--prefer-free-formats',
+            '--geo-bypass',
+            '--geo-bypass-country', 'IN',
+            '--socket-timeout', '15',
+            '--retries', '2',
+            '--fragment-retries', '2',
+            '--skip-unavailable-fragments',
+            '--concurrent-fragments', '1',
+            '--extractor-args', 'youtube:player_client=android',
+            '--extractor-args', 'youtube:player_skip=webpage,configs',
+            '--add-header', 'accept-language:en-US,en;q=0.9',
+            '--add-header', 'sec-fetch-mode:navigate',
+            '--add-header', 'sec-fetch-site:none',
+            '--add-header', 'sec-fetch-user:?1',
+            '--user-agent', ua
+        ];
+
+        if (fs.existsSync(cookiesPath)) {
+            args.push('--cookies', cookiesPath);
+        }
+
+        // Add command specific flags and URL
+        return [...args, ...commandFlags, url];
+    };
+
+    try {
+        return await executeYtDlp(generateArgs());
+    } catch (error) {
+        if (error.message === 'BOT_DETECTED') {
+            console.log('⚠️ Bot detected. Retrying with fresh UA...');
+            // Retry once
+            await new Promise(r => setTimeout(r, 2000));
+            return await executeYtDlp(generateArgs());
+        }
+        throw error;
+    }
+}
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Serving Static Files
-app.use(express.static(path.join(__dirname, '../')));
-app.use('/css', express.static(path.join(__dirname, '../css')));
-app.use('/js', express.static(path.join(__dirname, '../js')));
 app.use(cors());
 
 // Helmet
@@ -92,42 +141,45 @@ app.use(helmet({
     },
 }));
 
-// Security: Rate Limit (5 requests per 10 sec)
+// Static Files
+app.use(express.static(path.join(__dirname, '../')));
+app.use('/css', express.static(path.join(__dirname, '../css')));
+app.use('/js', express.static(path.join(__dirname, '../js')));
+
+// Security: Rate Limit (3 requests per 12 sec)
 const limiter = rateLimit({
-    windowMs: 10 * 1000,
-    max: 5,
-    message: { error: 'Too many requests. Please try again later.' }
+    windowMs: 12 * 1000,
+    max: 3,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please slow down.' }
 });
 app.use('/api/', limiter);
 
-// Root Route
+// Routes
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, '../index.html'));
 });
 
-// API: Health
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
-// API: Video Info
 app.post('/api/video-info', async (req, res) => {
     try {
         const { url } = req.body;
         if (!url) return res.status(400).json({ error: 'URL is required' });
 
-        const args = [
-            ...getCommonArgs(),
-            '-J',
-            '--no-playlist',
-            '--skip-download',
-            url
-        ];
+        // Cache Check
+        const cached = videoCache.get(url);
+        if (cached && (Date.now() - cached.time < 60000)) {
+            return res.json(cached.data);
+        }
 
-        const rawOutput = await runYtDlp(args);
-        const info = JSON.parse(rawOutput);
+        const output = await runSafeYtDlp(req, url, ['-J', '--skip-download']);
+        const info = JSON.parse(output);
 
         const formats = (info.formats || []).map(f => ({
             itag: f.format_id,
-            quality: f.format_note || `${f.height}p` || 'audio',
+            quality: f.format_note || `${f.height}p`,
             ext: f.ext,
             container: f.ext,
             hasAudio: f.acodec !== 'none',
@@ -136,52 +188,52 @@ app.post('/api/video-info', async (req, res) => {
             direct_url: f.url
         }));
 
-        // sort formats: high quality video first
         formats.sort((a, b) => {
             if (a.hasVideo && !b.hasVideo) return -1;
             if (!a.hasVideo && b.hasVideo) return 1;
-            return 0; // maintain original order mostly
+            return 0;
         });
 
-        res.json({
+        const data = {
             title: info.title,
-            duration: info.duration_string || info.duration, // duration_string is better if available, else seconds
+            duration: info.duration_string || info.duration,
             thumbnail: info.thumbnail,
             channel: info.uploader,
             views: info.view_count,
             formats: formats
-        });
+        };
+
+        // Set Cache
+        videoCache.set(url, { time: Date.now(), data });
+
+        res.json(data);
 
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Failed to fetch video info' });
+        if (error.message === 'QUEUE_FULL') {
+            return res.status(429).json({ error: 'Server busy. Please wait a moment.' });
+        }
+        if (error.message === 'RATE_LIMIT_DUPLICATE') {
+            return res.status(429).json({ error: 'Please wait before checking this video again.' });
+        }
+        console.error('Video Info Error:', error.message);
+        res.status(500).json({ error: 'Failed to fetch video info. Please try again.' });
     }
 });
 
-// API: Get Direct Link
 app.get('/api/get-link', async (req, res) => {
     try {
         const { url, itag } = req.query;
-        if (!url || !itag) return res.status(400).json({ error: 'Missing url or itag' });
+        if (!url || !itag) return res.status(400).json({ error: 'Missing parameters' });
 
-        const args = [
-            ...getCommonArgs(),
-            '-f', itag,
-            '-g',
-            url
-        ];
-
-        const directLink = await runYtDlp(args);
-
-        // Sometimes -g returns multiple lines if video and audio are separate streams.
-        // We take the first one or the one that corresponds to the itag.
-        // Usually valid direct link is just the stdout.
-
-        res.json({ direct_url: directLink.split('\n')[0] });
+        const output = await runSafeYtDlp(req, url, ['-f', itag, '-g']);
+        res.json({ direct_url: output.split('\n')[0] });
 
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Failed to generate link' });
+        if (error.message === 'QUEUE_FULL') {
+            return res.status(429).json({ error: 'Server busy. Please wait a moment.' });
+        }
+        console.error('Link Generation Error:', error.message);
+        res.status(500).json({ error: 'Failed to generate link. Please try again.' });
     }
 });
 
