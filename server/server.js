@@ -14,7 +14,54 @@ const app = express();
 const port = process.env.PORT || 3000;
 const ytDlp = require('yt-dlp-exec');
 
-// ... (middleware remains same)
+// Middleware
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} [${req.method}] ${req.url}`);
+    next();
+});
+
+app.use(express.json());
+app.use(express.static(path.join(__dirname, '../')));
+app.use('/css', express.static(path.join(__dirname, '../css')));
+app.use('/js', express.static(path.join(__dirname, '../js')));
+app.use(cors());
+
+// Configure Helmet with relaxed CSP
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com"],
+            imgSrc: ["'self'", "data:", "https://i.ytimg.com", "https://yt3.ggpht.com"],
+            connectSrc: ["'self'", "https://*.youtube.com", "https://*.googlevideo.com"],
+            mediaSrc: ["'self'", "blob:", "https://*.googlevideo.com"],
+            frameSrc: ["'self'"],
+            upgradeInsecureRequests: [],
+        },
+    },
+}));
+
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: { error: 'Too many requests. Please try again later.' }
+});
+app.use('/api/', limiter);
+
+const cache = new NodeCache({ stdTTL: 3600 });
+const downloadsDir = path.join(__dirname, '../downloads');
+
+if (!fs.existsSync(downloadsDir)) {
+    fs.mkdirSync(downloadsDir, { recursive: true });
+}
+
+// Explicit Root Route
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, '../index.html'));
+});
 
 // Routes
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
