@@ -23,6 +23,7 @@ const ELEMENTS = {
 };
 
 // State
+const API_BASE_URL = 'https://universal-video-downloader-c67b.onrender.com';
 let currentVideoData = null;
 
 // Initialization
@@ -80,7 +81,7 @@ async function fetchVideoInfo() {
     ELEMENTS.errorMsg.classList.add('hidden');
 
     try {
-        const response = await fetch('/api/video-info', {
+        const response = await fetch(`${API_BASE_URL}/api/video-info`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url })
@@ -140,7 +141,7 @@ function downloadDirectly(url, quality) {
     // Create hidden form
     const form = document.createElement('form');
     form.method = 'POST';
-    form.action = '/api/download';
+    form.action = `${API_BASE_URL}/api/download`;
     form.style.display = 'none';
 
     const inputUrl = document.createElement('input');
@@ -172,7 +173,7 @@ async function generateLink(url, quality) {
     btn.disabled = true;
 
     try {
-        const response = await fetch('/api/download', {
+        const response = await fetch(`${API_BASE_URL}/api/download`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url, quality, type: 'link' })
@@ -181,7 +182,7 @@ async function generateLink(url, quality) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Failed to generate link');
 
-        const fullLink = window.location.origin + data.url;
+        const fullLink = API_BASE_URL + data.url;
         ELEMENTS.generatedLinkInput.value = fullLink;
         ELEMENTS.linkContainer.classList.remove('hidden');
         showToast('✅ Link generated!');
