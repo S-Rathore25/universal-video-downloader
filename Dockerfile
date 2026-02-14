@@ -1,9 +1,11 @@
-FROM node:18-alpine
+FROM node:20-slim
 
-# Create app directory
+# Install ffmpeg (required for merging video/audio formats)
+RUN apt-get update && apt-get install -y ffmpeg
+
 WORKDIR /app
 
-# Copy package.json and package-lock.json
+# Copy package files
 COPY package*.json ./
 
 # Install dependencies
@@ -12,8 +14,9 @@ RUN npm install
 # Copy app source
 COPY . .
 
-# Expose port (must match your app's port)
+# Expose port
+ENV PORT=3000
 EXPOSE 3000
 
 # Start command
-CMD [ "npm", "start" ]
+CMD [ "node", "server/server.js" ]
