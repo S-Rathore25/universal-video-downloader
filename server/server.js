@@ -157,10 +157,13 @@ async function runSafeYtDlp(req, url, commandFlags) {
         // Use session-consistent headers
         const headers = generateBrowserHeaders(req);
 
-        // Retry Logic (Max 3 attempts with Proxy Rotation)
+        // Retry Logic (Max 3 attempts with Proxy Rotation & Client Rotation)
         let lastError = null;
+        const clients = ['android', 'ios', 'tv']; // Rotate clients to evade detection
+
         for (let attempt = 0; attempt < 3; attempt++) {
             const proxy = getHealthyProxy();
+            const currentClient = clients[attempt % clients.length];
 
             // If proxy pool is configured but no healthy proxy found
             if (PROXY_POOL.length > 0 && !proxy) {
@@ -179,14 +182,14 @@ async function runSafeYtDlp(req, url, commandFlags) {
                 '--skip-unavailable-fragments',
                 '--concurrent-fragments', '1',
 
-                // Fingerprint simulation
-                '--extractor-args', 'youtube:player_client=android',
+                // Dynamic Client Spoofing
+                '--extractor-args', `youtube:player_client=${currentClient}`,
                 '--extractor-args', 'youtube:player_skip=webpage,configs',
                 '--add-header', `accept-language:${headers.lang}`,
                 '--add-header', 'sec-fetch-mode:navigate',
                 '--add-header', 'sec-fetch-site:none',
                 '--add-header', 'sec-fetch-user:?1',
-                '--add-header', `sec-ch-ua-platform:"Android"`,
+                '--add-header', `sec-ch-ua-platform:"${currentClient === 'ios' ? 'iOS' : 'Android'}"`,
                 '--add-header', `sec-ch-ua-mobile:?1`,
                 '--user-agent', headers.ua
             ];
@@ -206,12 +209,12 @@ async function runSafeYtDlp(req, url, commandFlags) {
             } catch (error) {
                 lastError = error;
                 if (error.message === 'BOT_DETECTED') {
-                    console.log(`⚠️ Bot detected via ${proxy ? 'proxy' : 'direct'}. Attempt ${attempt + 1}/3`);
+                    console.log(`⚠️ Bot detected via ${proxy ? 'proxy' : 'direct'} using ${currentClient}. Attempt ${attempt + 1}/3`);
                     if (proxy) markProxyBad(proxy);
 
                     // Small delay before retry
-                    await new Promise(r => setTimeout(r, 1000));
-                    continue; // Retry with new proxy
+                    await new Promise(r => setTimeout(r, 1500));
+                    continue; // Retry with new proxy/client
                 }
                 // If it's another error (e.g. video not found), throw immediately
                 throw error;
