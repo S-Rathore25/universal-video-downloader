@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Video Downloader - YouTube Downloader HD</title>
+    <meta name="description" content="Download YouTube videos and Shorts in multiple qualities. Fast, secure, and free.">
+    <meta name="theme-color" content="#4f46e5">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎬</text></svg>">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <!-- CSS -->
+    <link rel="stylesheet" href="css/styles.css">
+    
+    <!-- Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+    <!-- Animated Background -->
+    <div class="background-container">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+        <div class="grid-overlay"></div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden">
+        <i class="fas fa-info-circle"></i>
+        <span id="toast-message">Notification</span>
+    </div>
+
+    <!-- Main Content -->
+    <main class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <i class="fas fa-film fa-spin-hover"></i>
+                <h1>Universal <span>Downloader</span></h1>
+            </div>
+            <p class="tagline">Download YouTube Videos & Shorts in HD</p>
+        </header>
+
+        <!-- Search Section -->
+        <section class="search-section glass-card">
+            <div class="input-group">
+                <i class="fas fa-link input-icon"></i>
+                <input type="text" id="video-url" placeholder="Paste YouTube URL here..." autocomplete="off">
+                <button id="clear-btn" class="clear-btn hidden" aria-label="Clear input">
+                    <i class="fas fa-times"></i>
+                </button>
+                <button id="fetch-btn" class="fetch-btn">
+                    <span class="btn-text">Fetch Video</span>
+                    <i class="fas fa-arrow-right"></i>
+                    <div class="loader hidden"></div>
+                </button>
+            </div>
+            <p class="error-msg hidden" id="error-msg"></p>
+        </section>
+
+        <!-- Result Section (Hidden initially) -->
+        <section id="result-section" class="result-section glass-card hidden">
+            <div class="video-meta">
+                <div class="thumbnail-wrapper">
+                    <img id="thumbnail" src="" alt="Video Thumbnail">
+                    <span id="duration" class="duration-badge">00:00</span>
+                </div>
+                <div class="video-info">
+                    <h2 id="video-title">Video Title</h2>
+                    <p id="channel-name"><i class="fas fa-user-circle"></i> <span>Channel Name</span></p>
+                    <div class="stats">
+                        <span id="views"><i class="fas fa-eye"></i> 0 views</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="download-options">
+                <div class="quality-selector">
+                    <label for="quality-select">Select Quality:</label>
+                    <select id="quality-select">
+                        <!-- Options populated via JS -->
+                    </select>
+                </div>
+
+                <div class="action-buttons">
+                    <button id="download-direct-btn" class="btn primary-btn">
+                        <i class="fas fa-download"></i>
+                        Download to Device
+                    </button>
+                    <button id="download-link-btn" class="btn secondary-btn">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        Generate Link (1h)
+                    </button>
+                </div>
+                
+                <div id="generated-link-container" class="link-container hidden">
+                    <input type="text" id="generated-link" readonly>
+                    <button id="copy-link-btn" class="icon-btn"><i class="fas fa-copy"></i></button>
+                    <button id="share-link-btn" class="icon-btn"><i class="fas fa-share-alt"></i></button>
+                </div>
+
+                <div id="progress-container" class="progress-wrapper hidden">
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 0%"></div>
+                    </div>
+                    <p class="progress-text">Processing...</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer glass-card">
+        <p><i class="fas fa-shield-alt"></i> Secure • Free • Fast</p>
+        <p class="copyright">© 2024 Universal Video Downloader</p>
+    </footer>
+
+    <!-- Disclaimer Modal -->
+    <div id="disclaimer-modal" class="modal-overlay">
+        <div class="modal glass-card">
+            <h3><i class="fas fa-exclamation-triangle"></i> Disclaimer</h3>
+            <p>This tool is for educational and personal use only. Please ensure you have the right to download content. Respect copyright laws. Download only content you own or have permission to use. Do not redistribute copyrighted material. By using this service, you agree to take full responsibility for your downloads.</p>
+            <button id="accept-disclaimer" class="btn primary-btn full-width">I Agree</button>
+        </div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
