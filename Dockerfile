@@ -1,7 +1,7 @@
 FROM node:20-slim
 
 # Install ffmpeg (required for merging video/audio formats)
-RUN apt-get update && apt-get install -y ffmpeg
+RUN apt-get update && apt-get install -y ffmpeg python3 python-is-python3
 
 WORKDIR /app
 
