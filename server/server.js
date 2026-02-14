@@ -14,8 +14,12 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // Middleware
+// Middleware
 app.use(express.json());
-app.use(express.static('public'));
+// Serve static files from root-level folders since they were moved out of 'public'
+app.use(express.static(path.join(__dirname, '../')));
+app.use('/css', express.static(path.join(__dirname, '../css')));
+app.use('/js', express.static(path.join(__dirname, '../js')));
 app.use(cors());
 
 // Configure Helmet with relaxed CSP for video downloading/previewing
