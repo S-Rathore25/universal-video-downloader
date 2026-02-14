@@ -106,16 +106,21 @@ function populateUI(data) {
     ELEMENTS.thumbnail.src = data.thumbnail;
     ELEMENTS.videoTitle.textContent = data.title;
     ELEMENTS.channelName.textContent = data.channel;
-    ELEMENTS.views.textContent = `${data.views} views`;
-    ELEMENTS.duration.textContent = data.duration;
+    ELEMENTS.views.textContent = data.views ? `${Number(data.views).toLocaleString()} views` : '';
+    ELEMENTS.duration.textContent = formatDuration(data.duration);
 
     // Populate Qualities
     ELEMENTS.qualitySelect.innerHTML = '';
-    data.formats.forEach(format => {
+
+    // Filter out formats that are likely not useful usually handled by backend but double check
+    const uniqueFormats = data.formats.filter(f => f.direct_url);
+
+    uniqueFormats.forEach(format => {
         const option = document.createElement('option');
-        option.value = format.itag; // Use itag or qualityLabel
-        option.textContent = `${format.quality} (${format.container})${format.hasAudio ? '' : ' (No Audio)'}`;
-        option.dataset.qualityLabel = format.quality; // Store for backend
+        option.value = format.itag;
+        const audioInfo = format.hasAudio ? '' : ' (No Audio)';
+        const sizeInfo = format.filesize ? ` - ${(format.filesize / 1024 / 1024).toFixed(1)} MB` : '';
+        option.textContent = `${format.quality} (${format.ext})${audioInfo}${sizeInfo}`;
         ELEMENTS.qualitySelect.appendChild(option);
     });
 
@@ -124,68 +129,36 @@ function populateUI(data) {
 }
 
 async function handleDownload(type) {
-    const qualityLabel = ELEMENTS.qualitySelect.value;
+    const itag = ELEMENTS.qualitySelect.value;
+    const url = ELEMENTS.urlInput.value.trim();
 
-    if (type === 'direct') {
-        // Direct Download: Use Form Submit to trigger browser download
-        downloadDirectly(ELEMENTS.urlInput.value, qualityLabel);
-    } else {
-        // Generate Link
-        await generateLink(ELEMENTS.urlInput.value, qualityLabel);
-    }
-}
+    if (!itag || !url) return showError('Please select a quality.');
 
-function downloadDirectly(url, quality) {
-    showToast('⬇️ Starting download...');
-
-    // Create hidden form
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = `${API_BASE_URL}/api/download`;
-    form.style.display = 'none';
-
-    const inputUrl = document.createElement('input');
-    inputUrl.name = 'url';
-    inputUrl.value = url;
-
-    const inputQuality = document.createElement('input');
-    inputQuality.name = 'quality';
-    inputQuality.value = quality;
-
-    const inputType = document.createElement('input');
-    inputType.name = 'type';
-    inputType.value = 'direct';
-
-    form.appendChild(inputUrl);
-    form.appendChild(inputQuality);
-    form.appendChild(inputType);
-
-    document.body.appendChild(form);
-    form.submit();
-
-    setTimeout(() => document.body.removeChild(form), 1000);
-}
-
-async function generateLink(url, quality) {
-    const btn = ELEMENTS.downloadLinkBtn;
+    const btn = type === 'direct' ? ELEMENTS.downloadDirectBtn : ELEMENTS.downloadLinkBtn;
     const originalText = btn.innerHTML;
-    btn.innerHTML = '<div class="loader"></div> Generating...';
+
+    // UI Feedback
+    btn.innerHTML = '<div class="loader"></div> Processing...';
     btn.disabled = true;
 
     try {
-        const response = await fetch(`${API_BASE_URL}/api/download`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, quality, type: 'link' })
-        });
+        // We use the separate endpoint to ensure we get a fresh link
+        const params = new URLSearchParams({ url, itag });
+        const response = await fetch(`${API_BASE_URL}/api/get-link?${params.toString()}`);
 
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Failed to generate link');
 
-        const fullLink = window.location.origin + data.url;
-        ELEMENTS.generatedLinkInput.value = fullLink;
-        ELEMENTS.linkContainer.classList.remove('hidden');
-        showToast('✅ Link generated!');
+        if (!response.ok) throw new Error(data.error || 'Failed to get link');
+
+        if (type === 'direct') {
+            showToast('🚀 Redirecting to download...');
+            // Redirect the browser to the direct googlevideo link
+            window.location.href = data.direct_url;
+        } else {
+            ELEMENTS.generatedLinkInput.value = data.direct_url;
+            ELEMENTS.linkContainer.classList.remove('hidden');
+            showToast('✅ Direct Link generated!');
+        }
 
     } catch (error) {
         showError(error.message);
@@ -210,6 +183,19 @@ function setLoading(isLoading) {
         ELEMENTS.loader.classList.add('hidden');
         ELEMENTS.fetchBtn.disabled = false;
     }
+}
+
+function formatDuration(duration) {
+    if (!duration) return '00:00';
+    // If it's already a string like "10:05", return it
+    if (String(duration).includes(':')) return duration;
+
+    // Otherwise treat as seconds
+    const seconds = parseInt(duration);
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
 }
 
 function showError(msg) {
@@ -244,8 +230,8 @@ async function shareLink() {
     if (navigator.share) {
         try {
             await navigator.share({
-                title: 'Video Download Link',
-                text: 'Check out this video download link:',
+                title: 'Video Direct Link',
+                text: 'Direct download link:',
                 url: link
             });
             showToast('Shared successfully!');
