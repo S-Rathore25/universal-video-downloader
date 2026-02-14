@@ -14,6 +14,9 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Enable trust proxy for Render/Heroku etc.
+app.set('trust proxy', 1);
+
 // Helper to run yt-dlp command and return JSON output
 function runYtDlp(args) {
     return new Promise((resolve, reject) => {
@@ -110,6 +113,7 @@ app.post('/api/video-info', async (req, res) => {
             '--no-check-certificates',
             '--no-warnings',
             '--prefer-free-formats',
+            '--extractor-args', 'youtube:player_client=ios',
             '--add-header', 'referer:youtube.com',
             '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         ];
@@ -146,13 +150,24 @@ app.post('/api/download', async (req, res) => {
         const { url, quality, type } = req.body;
 
         // Metadata fetch for filename (lightweight)
-        const info = await runYtDlp([url, '--dump-single-json', '--no-check-certificates']);
+        const metadataArgs = [
+            url,
+            '--dump-single-json',
+            '--no-check-certificates',
+            '--extractor-args', 'youtube:player_client=ios',
+            '--add-header', 'referer:youtube.com',
+            '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        ];
+        const info = await runYtDlp(metadataArgs);
         const title = info.title.replace(/[^\w\s-]/gi, '_').substring(0, 50);
         const filename = `${title}.mp4`;
 
         const args = [
             url,
             '-f', quality === 'highest' ? 'best[ext=mp4]' : `${quality}+bestaudio/best`,
+            '--extractor-args', 'youtube:player_client=ios',
+            '--add-header', 'referer:youtube.com',
+            '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             '-o', '-' // Output to stdout
         ];
 
