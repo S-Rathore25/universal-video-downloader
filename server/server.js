@@ -15,6 +15,10 @@ const port = process.env.PORT || 3000;
 
 // Middleware
 // Middleware
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} [${req.method}] ${req.url}`);
+    next();
+});
 app.use(express.json());
 // Serve static files from root-level folders since they were moved out of 'public'
 app.use(express.static(path.join(__dirname, '../')));
