@@ -12,41 +12,57 @@ A production-ready, beautiful YouTube video downloader web application built wit
 - **Mobile First**: Fully responsive on iOS and Android.
 - **Security**: Rate limiting, localized filename sanitization, and secure headers with Helmet.js.
 - **Auto-Cleanup**: Temporary files are automatically deleted after 1 hour.
+- **Docker Support**: Easy deployment with Docker.
 
 ## Tech Stack
 
-- **Backend**: Node.js, Express, @distube/ytdl-core (reliable fork of ytdl-core)
+- **Backend**: Node.js, Express, yt-dlp (System Binary Execution for improved stability)
 - **Frontend**: HTML5, CSS3 (Variables, Animations), Vanilla JavaScript
 - **Utilities**: express-rate-limit, node-cache, helmet, cors
+- **Containerization**: Docker, Docker Compose (optional)
 
 ## Installation
 
-1.  **Clone the repository** (or download the files):
+### Method 1: Docker (Recommended)
+
+1.  **Clone the repository**:
     ```bash
     git clone https://github.com/yourusername/universal-video-downloader.git
     cd universal-video-downloader
     ```
 
-2.  **Install dependencies**:
+2.  **Build the Docker Image**:
     ```bash
-    npm install
+    docker build -t universal-video-downloader .
     ```
 
-3.  **Configure Environment**:
-    - Rename `.env.example` to `.env` (optional, defaults to port 3000).
+3.  **Run the Container**:
+    ```bash
+    docker run -p 3000:3000 universal-video-downloader
+    ```
 
-4.  **Start the Server**:
-    - For development (auto-reload):
-      ```bash
-      npm run dev
-      ```
-    - For production:
-      ```bash
-      npm start
-      ```
-
-5.  **Access the App**:
+4.  **Access the App**:
     - Open your browser and navigate to `http://localhost:3000`.
+
+### Method 2: Standard Installation (Method 2)
+
+**Prerequisites**:
+- Node.js (v18+)
+- Python 3+
+- FFmpeg (Must be installed and added to PATH)
+- yt-dlp (Must be installed and added to PATH or use `pip install yt-dlp`)
+
+1.  **Install dependencies**:
+    ```bash
+    npm install
+    # Ensure system dependencies (yt-dlp, python, ffmpeg) are installed on your machine.
+    ```
+
+2.  **Start the Server**:
+    - For development: `npm run dev`
+    - For production: `npm start`
+
+3.  **Access the App**: `http://localhost:3000`
 
 ## API Endpoints
 

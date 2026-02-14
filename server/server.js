@@ -7,12 +7,43 @@ const NodeCache = require('node-cache');
 const path = require('path');
 const fs = require('fs');
 const dotenv = require('dotenv');
+const { spawn } = require('child_process');
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
-const ytDlp = require('yt-dlp-exec');
+
+// Helper to run yt-dlp command and return JSON output
+function runYtDlp(args) {
+    return new Promise((resolve, reject) => {
+        // Use the system-wide 'yt-dlp' binary insteady of npm wrapper
+        const process = spawn('yt-dlp', args);
+        let stdout = '';
+        let stderr = '';
+
+        process.stdout.on('data', (data) => stdout += data);
+        process.stderr.on('data', (data) => stderr += data);
+
+        process.on('close', (code) => {
+            if (code !== 0) {
+                console.error(`yt-dlp stderr: ${stderr}`);
+                reject(new Error(`yt-dlp exited with code ${code}`));
+            } else {
+                try {
+                    resolve(JSON.parse(stdout));
+                } catch (e) {
+                    if (!stdout) reject(new Error('yt-dlp returned empty output'));
+                    else resolve(stdout);
+                }
+            }
+        });
+
+        process.on('error', (err) => {
+            reject(new Error(`Spawn error: ${err.message}`));
+        });
+    });
+}
 
 // Middleware
 app.use((req, res, next) => {
@@ -21,6 +52,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../')));
 app.use('/css', express.static(path.join(__dirname, '../css')));
 app.use('/js', express.static(path.join(__dirname, '../js')));
@@ -69,32 +101,30 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 app.post('/api/video-info', async (req, res) => {
     try {
         const { url } = req.body;
-        // Basic check, yt-dlp handles validation better
         if (!url || !url.includes('youtu')) return res.status(400).json({ error: 'Invalid YouTube URL' });
 
-        const output = await ytDlp(url, {
-            dumpSingleJson: true,
-            noCheckCertificates: true,
-            noWarnings: true,
-            preferFreeFormats: true,
-            addHeader: [
-                'referer:youtube.com',
-                'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            ]
-        });
+        const args = [
+            url,
+            '--dump-single-json',
+            '--no-check-certificates',
+            '--no-warnings',
+            '--prefer-free-formats',
+            '--add-header', 'referer:youtube.com',
+            '--add-header', 'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        ];
 
-        const formats = output.formats.filter(f => f.acodec !== 'none' && f.vcodec !== 'none'); // video+audio
-        // If no combined formats, fallback to video only or use best available
-        // For simplicity in this demo, filter for mp4 with audio
+        const output = await runYtDlp(args);
+
+        const formats = output.formats.filter(f => f.acodec !== 'none' && f.vcodec !== 'none');
 
         const videoData = {
             title: output.title,
             thumbnail: output.thumbnail,
             channel: output.uploader,
-            views: output.view_count.toLocaleString(),
+            views: output.view_count ? output.view_count.toLocaleString() : '0',
             duration: formatDuration(output.duration),
             formats: formats.map(f => ({
-                itag: f.format_id, // map format_id to itag for frontend compat
+                itag: f.format_id,
                 quality: f.format_note || `${f.height}p`,
                 container: f.ext,
                 hasAudio: f.acodec !== 'none',
@@ -114,36 +144,49 @@ app.post('/api/download', async (req, res) => {
     try {
         const { url, quality, type } = req.body;
 
-        // Sanitize
-        const info = await ytDlp(url, { dumpSingleJson: true, noCheckCertificates: true });
+        // Metadata fetch for filename (lightweight)
+        const info = await runYtDlp([url, '--dump-single-json', '--no-check-certificates']);
         const title = info.title.replace(/[^\w\s-]/gi, '_').substring(0, 50);
         const filename = `${title}.mp4`;
+
+        const args = [
+            url,
+            '-f', quality === 'highest' ? 'best[ext=mp4]' : `${quality}+bestaudio/best`,
+            '-o', '-' // Output to stdout
+        ];
 
         if (type === 'direct') {
             res.header('Content-Disposition', `attachment; filename="${filename}"`);
 
-            // Stream directly to response
-            const stream = ytDlp.exec(url, {
-                format: quality === 'highest' ? 'best[ext=mp4]' : `${quality}+bestaudio/best`,
-                output: '-'
-            });
+            const child = spawn('yt-dlp', args);
+            child.stdout.pipe(res);
+            child.stderr.on('data', d => console.error(`[yt-dlp stderr]: ${d}`));
 
-            stream.stdout.pipe(res);
+            res.on('close', () => child.kill());
+
         } else {
             // Link generation
             const filePath = path.join(downloadsDir, filename);
-
             if (fs.existsSync(filePath)) {
                 return res.json({ url: `/downloads/${encodeURIComponent(filename)}`, expires: '1 hour' });
             }
 
-            // Download to file
-            await ytDlp.exec(url, {
-                format: quality === 'highest' ? 'best[ext=mp4]' : `${quality}+bestaudio/best`,
-                output: filePath
+            const fileStream = fs.createWriteStream(filePath);
+            const child = spawn('yt-dlp', args);
+            child.stdout.pipe(fileStream);
+
+            child.on('close', (code) => {
+                if (code === 0) {
+                    res.json({ url: `/downloads/${encodeURIComponent(filename)}`, expires: '1 hour' });
+                } else {
+                    res.status(500).json({ error: 'Download process failed' });
+                }
             });
 
-            res.json({ url: `/downloads/${encodeURIComponent(filename)}`, expires: '1 hour' });
+            child.on('error', (err) => {
+                console.error('Spawn error:', err);
+                res.status(500).json({ error: 'Download failed to start' });
+            });
         }
     } catch (error) {
         console.error('Download Error:', error);

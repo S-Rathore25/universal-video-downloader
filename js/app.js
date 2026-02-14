@@ -124,7 +124,7 @@ function populateUI(data) {
 }
 
 async function handleDownload(type) {
-    const qualityLabel = ELEMENTS.qualitySelect.options[ELEMENTS.qualitySelect.selectedIndex].dataset.qualityLabel;
+    const qualityLabel = ELEMENTS.qualitySelect.value;
 
     if (type === 'direct') {
         // Direct Download: Use Form Submit to trigger browser download
