@@ -11,8 +11,36 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
+const fs = require('fs');
+
 // 1. Trust Proxy for Render
 app.set('trust proxy', 1);
+
+// Write cookies from env var if present
+const cookiesPath = path.join(__dirname, 'cookies.txt');
+if (process.env.YOUTUBE_COOKIES) {
+    try {
+        fs.writeFileSync(cookiesPath, process.env.YOUTUBE_COOKIES);
+        console.log('Cookies file created from environment variable.');
+    } catch (err) {
+        console.error('Failed to create cookies file:', err);
+    }
+}
+
+// Helper: Get common yt-dlp args
+function getCommonArgs() {
+    const args = [
+        '--no-check-certificates',
+        '--no-warnings',
+        '--extractor-args', 'youtube:player_client=android', // Anti-bot
+    ];
+
+    if (fs.existsSync(cookiesPath)) {
+        args.push('--cookies', cookiesPath);
+    }
+
+    return args;
+}
 
 // Helper: Run yt-dlp
 function runYtDlp(args) {
@@ -87,8 +115,8 @@ app.post('/api/video-info', async (req, res) => {
         if (!url) return res.status(400).json({ error: 'URL is required' });
 
         const args = [
+            ...getCommonArgs(),
             '-J',
-            '--no-warnings',
             '--no-playlist',
             '--skip-download',
             url
@@ -137,6 +165,7 @@ app.get('/api/get-link', async (req, res) => {
         if (!url || !itag) return res.status(400).json({ error: 'Missing url or itag' });
 
         const args = [
+            ...getCommonArgs(),
             '-f', itag,
             '-g',
             url
