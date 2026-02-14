@@ -215,6 +215,12 @@ app.post('/api/video-info', async (req, res) => {
         if (error.message === 'RATE_LIMIT_DUPLICATE') {
             return res.status(429).json({ error: 'Please wait before checking this video again.' });
         }
+        if (error.message === 'NO_HEALTHY_PROXIES') {
+            return res.status(503).json({ error: 'Service temporarily unavailable. Please try again later.' });
+        }
+        if (error.message === 'BOT_DETECTED') {
+            return res.status(503).json({ error: 'Video temporarily unavailable due to high traffic.' });
+        }
         console.error('Video Info Error:', error.message);
         res.status(500).json({ error: 'Failed to fetch video info. Please try again.' });
     }
