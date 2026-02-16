@@ -150,6 +150,7 @@ function executeYtDlp(args) {
 
 // Queue & Throttling Wrapper
 // Queue & Throttling Wrapper
+// Queue & Throttling Wrapper
 async function runSafeYtDlp(req, url, commandFlags) {
     const ip = req.ip || 'unknown';
 
@@ -174,51 +175,84 @@ async function runSafeYtDlp(req, url, commandFlags) {
         const delay = Math.floor(Math.random() * 1000) + 500;
         await new Promise(r => setTimeout(r, delay));
 
-        // Simplified Execution: Use Android Client to bypass Cloud Blocking
-        // Data centers like Render need to look like Mobile Apps to avoid 429/Sign-in errors
-        const args = [
-            '--force-ipv4', // CRITICAL for Render: Avoid blocked IPv6 ranges
-            '--no-playlist',
-            '--no-check-certificates',
-            '--prefer-free-formats',
-            '--geo-bypass',
-            '--socket-timeout', '15',
-            '--retries', '2',
-            '--fragment-retries', '2',
-            '--skip-unavailable-fragments',
-            '--concurrent-fragments', '1',
-
-            // Critical for Render/Cloud: Spoof Android App
-            '--extractor-args', 'youtube:player_client=android',
-            '--extractor-args', 'youtube:player_skip=webpage,configs',
-            '--user-agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+        const strategies = [
+            {
+                name: 'Android Client',
+                args: [
+                    '--extractor-args', 'youtube:player_client=android',
+                    '--extractor-args', 'youtube:player_skip=webpage,configs',
+                    '--user-agent', 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.101 Mobile Safari/537.36'
+                ]
+            },
+            {
+                name: 'iOS Client',
+                args: [
+                    '--extractor-args', 'youtube:player_client=ios',
+                    '--extractor-args', 'youtube:player_skip=webpage,configs',
+                    '--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1'
+                ]
+            },
+            {
+                name: 'Web Client',
+                args: [
+                    '--extractor-args', 'youtube:player_client=web',
+                    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+                ]
+            }
         ];
 
-        // Proxy support if configured
-        const proxy = getHealthyProxy();
-        if (proxy) {
-            args.push('--proxy', proxy);
-        } else if (PROXY_POOL.length > 0) {
-            console.warn('Proxy pool configured but no healthy proxies available. Trying direct.');
-        }
+        let lastError = null;
 
-        if (fs.existsSync(cookiesPath)) {
-            args.push('--cookies', cookiesPath);
-        }
+        for (const strategy of strategies) {
+            console.log(`[Attempt] Trying with ${strategy.name}...`);
 
-        const finalArgs = [...args, ...commandFlags, url];
+            const args = [
+                '--force-ipv4', // CRITICAL for Render: Avoid blocked IPv6 ranges
+                '--no-playlist',
+                '--no-check-certificates',
+                '--prefer-free-formats',
+                '--geo-bypass',
+                '--socket-timeout', '15',
+                '--retries', '2',
+                '--fragment-retries', '2',
+                '--skip-unavailable-fragments',
+                '--concurrent-fragments', '1',
+                // Explicitly tell yt-dlp to use node for JS challenges
+                '--js-runtimes', 'node',
+                // Enable remote code execution for challenge solving (REQUIRED for new YouTube changes)
+                '--remote-components', 'ejs:github',
+                ...strategy.args
+            ];
 
-        try {
-            return await executeYtDlp(finalArgs);
-        } catch (error) {
-            // Simple retry logic for 429s or network blips
-            if (error.stderr && (error.stderr.includes('429') || error.stderr.includes('network'))) {
-                console.log(`[Retry] Retrying due to network/rate error: ${error.message}`);
-                await new Promise(r => setTimeout(r, 2000));
-                return await executeYtDlp(finalArgs);
+            // Proxy support if configured
+            const proxy = getHealthyProxy();
+            if (proxy) {
+                args.push('--proxy', proxy);
+            } else if (PROXY_POOL.length > 0) {
+                console.warn('Proxy pool configured but no healthy proxies available. Trying direct.');
             }
-            throw error;
+
+            if (fs.existsSync(cookiesPath)) {
+                args.push('--cookies', cookiesPath);
+            }
+
+            const finalArgs = [...args, ...commandFlags, url];
+
+            try {
+                return await executeYtDlp(finalArgs);
+            } catch (error) {
+                lastError = error;
+                // Only retry on bot detection or network errors
+                if (error.message === 'BOT_DETECTED' || (error.stderr && (error.stderr.includes('429') || error.stderr.includes('network')))) {
+                    console.warn(`[Retry] ${strategy.name} failed: ${error.message}. Trying next strategy...`);
+                    await new Promise(r => setTimeout(r, 1000)); // Wait a bit before retry
+                    continue;
+                }
+                throw error; // Throw other errors immediately
+            }
         }
+
+        throw lastError; // If all strategies fail
 
     } finally {
         // Release Lock
