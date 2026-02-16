@@ -312,12 +312,18 @@ app.post('/api/video-info', async (req, res) => {
 });
 
 // FFmpeg Configuration
-const ffmpegDir = path.join(process.env.LOCALAPPDATA, 'Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.0.1-full_build/bin');
-if (fs.existsSync(ffmpegDir)) {
-    process.env.PATH = `${ffmpegDir};${process.env.PATH}`;
-    console.log(`[FFmpeg] Added to PATH: ${ffmpegDir}`);
+// FFmpeg Configuration
+if (process.env.LOCALAPPDATA) {
+    const ffmpegDir = path.join(process.env.LOCALAPPDATA, 'Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.0.1-full_build/bin');
+    if (fs.existsSync(ffmpegDir)) {
+        process.env.PATH = `${ffmpegDir};${process.env.PATH}`;
+        console.log(`[FFmpeg] Added to Windows PATH: ${ffmpegDir}`);
+    } else {
+        console.warn('[FFmpeg] Windows FFmpeg directory not found. Utilizing system PATH instead.');
+    }
 } else {
-    console.warn('[FFmpeg] Warning: FFmpeg directory not found at expected location.');
+    // Linux/Docker/Render Environment
+    console.log('[FFmpeg] Running on non-Windows environment. Relying on system PATH for FFmpeg.');
 }
 
 app.get('/api/get-link', async (req, res) => {
