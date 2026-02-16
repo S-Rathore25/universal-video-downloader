@@ -155,8 +155,8 @@ async function runSafeYtDlp(req, url, commandFlags) {
         const delay = Math.floor(Math.random() * 1000) + 500;
         await new Promise(r => setTimeout(r, delay));
 
-        // Simplified Execution: Let yt-dlp handle the headers
-        // We only add cookies if they exist
+        // Simplified Execution: Use Android Client to bypass Cloud Blocking
+        // Data centers like Render need to look like Mobile Apps to avoid 429/Sign-in errors
         const args = [
             '--no-playlist',
             '--no-check-certificates',
@@ -167,9 +167,11 @@ async function runSafeYtDlp(req, url, commandFlags) {
             '--fragment-retries', '2',
             '--skip-unavailable-fragments',
             '--concurrent-fragments', '1',
-            // Default generic user agent to look like a browser if needed, but usually yt-dlp defaults are best.
-            // Using a standard modern Chrome UA just in case.
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+            // Critical for Render/Cloud: Spoof Android App
+            '--extractor-args', 'youtube:player_client=android',
+            '--extractor-args', 'youtube:player_skip=webpage,configs',
+            '--user-agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
         ];
 
         // Proxy support if configured
@@ -363,6 +365,11 @@ app.get('/api/stream-download', async (req, res) => {
         '-f', `${itag}+bestaudio/best`,
         '--merge-output-format', 'mp4',
         '-o', '-', // Output to stdout
+
+        // Critical for Render/Cloud: Spoof Android App
+        '--extractor-args', 'youtube:player_client=android',
+        '--extractor-args', 'youtube:player_skip=webpage,configs',
+
         url
     ];
 
@@ -378,8 +385,8 @@ app.get('/api/stream-download', async (req, res) => {
     if (proxy) args.push('--proxy', proxy);
     if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
 
-    // Dynamic User Agent
-    args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    // Dynamic User Agent (Android)
+    args.push('--user-agent', 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
 
     const ytProcess = spawn('yt-dlp', args);
 
