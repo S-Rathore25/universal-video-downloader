@@ -158,6 +158,7 @@ async function runSafeYtDlp(req, url, commandFlags) {
         // Simplified Execution: Use Android Client to bypass Cloud Blocking
         // Data centers like Render need to look like Mobile Apps to avoid 429/Sign-in errors
         const args = [
+            '--force-ipv4', // CRITICAL for Render: Avoid blocked IPv6 ranges
             '--no-playlist',
             '--no-check-certificates',
             '--prefer-free-formats',
@@ -355,6 +356,7 @@ app.get('/api/stream-download', async (req, res) => {
     res.header('Content-Type', 'video/mp4');
 
     const args = [
+        '--force-ipv4', // CRITICAL for Render
         '--no-playlist',
         '--no-check-certificates',
         '--prefer-free-formats',
@@ -374,7 +376,7 @@ app.get('/api/stream-download', async (req, res) => {
     ];
 
     // Use our healthy proxy logic if possible, but for streaming large files,
-    // we should be careful about proxy bandwidth. 
+    // we should be careful about proxy bandwidth.
     // For now, let's use direct connection or the proxy wrapper slightly modified.
     // To keep it simple and reusing the safe wrapper logic is hard here because of piping.
     // We will spawn directly but use the proxy pool logic manually.
