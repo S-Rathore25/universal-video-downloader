@@ -22,7 +22,11 @@ const ipLocks = new Map(); // semaphore for 1 process per IP
 const recentRequests = new Map(); // tracking recent URLs per IP
 
 // Proxy Management
-const PROXY_POOL = (process.env.PROXY_POOL || '').split(',').map(p => p.trim()).filter(p => p);
+// Proxy Management
+// Combine single PROXY_URL and PROXY_POOL into one list
+const rawProxies = [process.env.PROXY_URL, ...(process.env.PROXY_POOL || '').split(',')];
+const PROXY_POOL = rawProxies.map(p => p?.trim()).filter(p => p);
+
 const proxyHealth = new Map(); // { fails: number, bannedUntil: number }
 
 function getHealthyProxy() {
@@ -31,19 +35,34 @@ function getHealthyProxy() {
     // Shuffle proxies for random selection
     const shuffled = [...PROXY_POOL].sort(() => 0.5 - Math.random());
 
+    let bestBadProxy = null;
+    let minBanTime = Infinity;
+
     for (const proxy of shuffled) {
         const health = proxyHealth.get(proxy);
-        if (!health) return proxy;
+        if (!health) return proxy; // Fresh proxy
 
         if (Date.now() > health.bannedUntil) {
             // Unban if time expired
             proxyHealth.delete(proxy);
             return proxy;
         }
+
+        // Track the one that will be unbanned soonest
+        if (health.bannedUntil < minBanTime) {
+            minBanTime = health.bannedUntil;
+            bestBadProxy = proxy;
+        }
     }
 
-    // If all banned, return the one with earliest unban time (fail-safe)
-    return null;
+    // If all are banned, use the one that expires soonest (Force Proxy Usage)
+    // This prevents falling back to direct connection which leaks IP
+    if (bestBadProxy) {
+        console.warn(`[Proxy] All proxies banned. Forcing use of ${bestBadProxy.substring(0, 20)}...`);
+        return bestBadProxy;
+    }
+
+    return PROXY_POOL[0]; // Fallback to first if something weird happens
 }
 
 function markProxyBad(proxy) {
