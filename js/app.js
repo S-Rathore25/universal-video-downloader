@@ -112,15 +112,34 @@ function populateUI(data) {
     // Populate Qualities
     ELEMENTS.qualitySelect.innerHTML = '';
 
-    // Filter out formats that are likely not useful usually handled by backend but double check
-    const uniqueFormats = data.formats.filter(f => f.direct_url);
+    // Show all formats again, but label them if they will be merged
+    // We filter formats that have at least video or audio
+    const uniqueFormats = data.formats.filter(f => f.direct_url || f.height);
+
+    // Sort by quality (highest resolution first)
+    uniqueFormats.sort((a, b) => {
+        const resA = parseInt(a.quality) || 0;
+        const resB = parseInt(b.quality) || 0;
+        return resB - resA;
+    });
 
     uniqueFormats.forEach(format => {
         const option = document.createElement('option');
         option.value = format.itag;
-        const audioInfo = format.hasAudio ? '' : ' (No Audio)';
+
+        // Metadata for logic
+        option.dataset.hasAudio = format.hasAudio;
+
+        // Clean up label
+        let qualityLabel = format.quality;
+        if (!qualityLabel.includes('p') && !isNaN(parseInt(qualityLabel))) {
+            qualityLabel += 'p';
+        }
+
+        const audioStatus = format.hasAudio ? '' : ' (HQ Audio Merge)';
         const sizeInfo = format.filesize ? ` - ${(format.filesize / 1024 / 1024).toFixed(1)} MB` : '';
-        option.textContent = `${format.quality} (${format.ext})${audioInfo}${sizeInfo}`;
+
+        option.textContent = `${qualityLabel} (${format.ext})${audioStatus}${sizeInfo}`;
         ELEMENTS.qualitySelect.appendChild(option);
     });
 
@@ -137,12 +156,28 @@ async function handleDownload(type) {
     const btn = type === 'direct' ? ELEMENTS.downloadDirectBtn : ELEMENTS.downloadLinkBtn;
     const originalText = btn.innerHTML;
 
-    // UI Feedback
+    // Check if we need to use server-side merging (for HQ videos without audio)
+    const selectedOption = ELEMENTS.qualitySelect.options[ELEMENTS.qualitySelect.selectedIndex];
+    const needsMerge = selectedOption.dataset.hasAudio === 'false';
+
+    // If it's a direct download AND needs merge, bypass the API link gen
+    if (type === 'direct' && needsMerge) {
+        showToast('🚀 Preparing HQ Download (Audio Merging)...');
+        const params = new URLSearchParams({
+            url,
+            itag,
+            title: currentVideoData?.title || 'video'
+        });
+        // Trigger download via browser navigation
+        window.location.href = `${API_BASE_URL}/api/stream-download?${params.toString()}`;
+        return;
+    }
+
+    // Standard flow (Direct Link for simple formats OR getting a link)
     btn.innerHTML = '<div class="loader"></div> Processing...';
     btn.disabled = true;
 
     try {
-        // We use the separate endpoint to ensure we get a fresh link
         const params = new URLSearchParams({ url, itag });
         const response = await fetch(`${API_BASE_URL}/api/get-link?${params.toString()}`);
 
@@ -152,12 +187,21 @@ async function handleDownload(type) {
 
         if (type === 'direct') {
             showToast('🚀 Redirecting to download...');
-            // Redirect the browser to the direct googlevideo link
             window.location.href = data.direct_url;
         } else {
-            ELEMENTS.generatedLinkInput.value = data.direct_url;
+            if (needsMerge) {
+                // Warning for "Generate Link" on merge-only formats
+                showToast('⚠️ Note: High Quality links expire quickly');
+                // For "Generate Link", we can't really give a direct Googlevideo link because it has no audio.
+                // We point them to our stream endpoint instead!
+                const streamUrl = `${window.location.origin}/api/stream-download?${new URLSearchParams({ url, itag, title: currentVideoData?.title }).toString()}`;
+                ELEMENTS.generatedLinkInput.value = streamUrl;
+            } else {
+                ELEMENTS.generatedLinkInput.value = data.direct_url;
+            }
+
             ELEMENTS.linkContainer.classList.remove('hidden');
-            showToast('✅ Direct Link generated!');
+            showToast('✅ Download Link generated!');
         }
 
     } catch (error) {

@@ -130,6 +130,7 @@ function executeYtDlp(args) {
 }
 
 // Queue & Throttling Wrapper
+// Queue & Throttling Wrapper
 async function runSafeYtDlp(req, url, commandFlags) {
     const ip = req.ip || 'unknown';
 
@@ -151,78 +152,51 @@ async function runSafeYtDlp(req, url, commandFlags) {
 
     try {
         // 3. Random Delay (human simulation)
-        const delay = Math.floor(Math.random() * 2000) + 1000;
+        const delay = Math.floor(Math.random() * 1000) + 500;
         await new Promise(r => setTimeout(r, delay));
 
-        // Use session-consistent headers
-        const headers = generateBrowserHeaders(req);
+        // Simplified Execution: Let yt-dlp handle the headers
+        // We only add cookies if they exist
+        const args = [
+            '--no-playlist',
+            '--no-check-certificates',
+            '--prefer-free-formats',
+            '--geo-bypass',
+            '--socket-timeout', '15',
+            '--retries', '2',
+            '--fragment-retries', '2',
+            '--skip-unavailable-fragments',
+            '--concurrent-fragments', '1',
+            // Default generic user agent to look like a browser if needed, but usually yt-dlp defaults are best.
+            // Using a standard modern Chrome UA just in case.
+            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ];
 
-        // Retry Logic (Max 3 attempts with Proxy Rotation & Client Rotation)
-        let lastError = null;
-        const clients = ['android', 'ios', 'tv']; // Rotate clients to evade detection
-
-        for (let attempt = 0; attempt < 3; attempt++) {
-            const proxy = getHealthyProxy();
-            const currentClient = clients[attempt % clients.length];
-
-            // If proxy pool is configured but no healthy proxy found
-            if (PROXY_POOL.length > 0 && !proxy) {
-                throw new Error('NO_HEALTHY_PROXIES');
-            }
-
-            const args = [
-                '--no-playlist',
-                '--no-check-certificates',
-                '--prefer-free-formats',
-                '--geo-bypass',
-                '--geo-bypass-country', 'IN',
-                '--socket-timeout', '15',
-                '--retries', '2',
-                '--fragment-retries', '2',
-                '--skip-unavailable-fragments',
-                '--concurrent-fragments', '1',
-
-                // Dynamic Client Spoofing
-                '--extractor-args', `youtube:player_client=${currentClient}`,
-                '--extractor-args', 'youtube:player_skip=webpage,configs',
-                '--add-header', `accept-language:${headers.lang}`,
-                '--add-header', 'sec-fetch-mode:navigate',
-                '--add-header', 'sec-fetch-site:none',
-                '--add-header', 'sec-fetch-user:?1',
-                '--add-header', `sec-ch-ua-platform:"${currentClient === 'ios' ? 'iOS' : 'Android'}"`,
-                '--add-header', `sec-ch-ua-mobile:?1`,
-                '--user-agent', headers.ua
-            ];
-
-            if (proxy) {
-                args.push('--proxy', proxy);
-            }
-
-            if (fs.existsSync(cookiesPath)) {
-                args.push('--cookies', cookiesPath);
-            }
-
-            const finalArgs = [...args, ...commandFlags, url];
-
-            try {
-                return await executeYtDlp(finalArgs);
-            } catch (error) {
-                lastError = error;
-                if (error.message === 'BOT_DETECTED') {
-                    console.log(`⚠️ Bot detected via ${proxy ? 'proxy' : 'direct'} using ${currentClient}. Attempt ${attempt + 1}/3`);
-                    if (proxy) markProxyBad(proxy);
-
-                    // Small delay before retry
-                    await new Promise(r => setTimeout(r, 1500));
-                    continue; // Retry with new proxy/client
-                }
-                // If it's another error (e.g. video not found), throw immediately
-                throw error;
-            }
+        // Proxy support if configured
+        const proxy = getHealthyProxy();
+        if (proxy) {
+            args.push('--proxy', proxy);
+        } else if (PROXY_POOL.length > 0) {
+            console.warn('Proxy pool configured but no healthy proxies available. Trying direct.');
         }
 
-        // If we exhausted retries
-        throw lastError;
+        if (fs.existsSync(cookiesPath)) {
+            args.push('--cookies', cookiesPath);
+        }
+
+        const finalArgs = [...args, ...commandFlags, url];
+
+        try {
+            return await executeYtDlp(finalArgs);
+        } catch (error) {
+            // Simple retry logic for 429s or network blips
+            if (error.stderr && (error.stderr.includes('429') || error.stderr.includes('network'))) {
+                console.log(`[Retry] Retrying due to network/rate error: ${error.message}`);
+                await new Promise(r => setTimeout(r, 2000));
+                return await executeYtDlp(finalArgs);
+            }
+            throw error;
+        }
 
     } finally {
         // Release Lock
@@ -337,6 +311,15 @@ app.post('/api/video-info', async (req, res) => {
     }
 });
 
+// FFmpeg Configuration
+const ffmpegDir = path.join(process.env.LOCALAPPDATA, 'Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.0.1-full_build/bin');
+if (fs.existsSync(ffmpegDir)) {
+    process.env.PATH = `${ffmpegDir};${process.env.PATH}`;
+    console.log(`[FFmpeg] Added to PATH: ${ffmpegDir}`);
+} else {
+    console.warn('[FFmpeg] Warning: FFmpeg directory not found at expected location.');
+}
+
 app.get('/api/get-link', async (req, res) => {
     try {
         const { url, itag } = req.query;
@@ -352,6 +335,63 @@ app.get('/api/get-link', async (req, res) => {
         console.error('Link Generation Error:', error.message);
         res.status(500).json({ error: 'Failed to generate link. Please try again.' });
     }
+});
+
+// Stream Download Endpoint (For Merging Video+Audio)
+app.get('/api/stream-download', async (req, res) => {
+    const { url, itag, title } = req.query;
+    if (!url || !itag) return res.status(400).send('Missing parameters');
+
+    const safeTitle = (title || 'video').replace(/[^a-zA-Z0-9-_]/g, '_');
+    res.header('Content-Disposition', `attachment; filename="${safeTitle}.mp4"`);
+    res.header('Content-Type', 'video/mp4');
+
+    const args = [
+        '--no-playlist',
+        '--no-check-certificates',
+        '--prefer-free-formats',
+        '--geo-bypass',
+        '--socket-timeout', '30',
+        '--retries', '3',
+        // Merge video+audio
+        '-f', `${itag}+bestaudio/best`,
+        '--merge-output-format', 'mp4',
+        '-o', '-', // Output to stdout
+        url
+    ];
+
+    // Use our healthy proxy logic if possible, but for streaming large files,
+    // we should be careful about proxy bandwidth. 
+    // For now, let's use direct connection or the proxy wrapper slightly modified.
+    // To keep it simple and reusing the safe wrapper logic is hard here because of piping.
+    // We will spawn directly but use the proxy pool logic manually.
+
+    console.log(`[Stream] Starting download for ${itag} from ${url}`);
+
+    const proxy = getHealthyProxy();
+    if (proxy) args.push('--proxy', proxy);
+    if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
+
+    // Dynamic User Agent
+    args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+    const ytProcess = spawn('yt-dlp', args);
+
+    ytProcess.stdout.pipe(res);
+
+    ytProcess.stderr.on('data', (data) => {
+        // Log stderr but don't fail immediately unless it's fatal
+        const msg = data.toString();
+        if (msg.includes('ERROR:')) console.error(`[Stream Error] ${msg}`);
+    });
+
+    ytProcess.on('close', (code) => {
+        if (code !== 0) console.log(`[Stream] Ended with code ${code}`);
+    });
+
+    req.on('close', () => {
+        ytProcess.kill(); // Kill download if client disconnects
+    });
 });
 
 app.listen(port, '0.0.0.0', () => {
